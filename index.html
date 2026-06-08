@@ -258,10 +258,10 @@ function thrTypeLabel(t){return {min:'越高越好',max:'越低越好',range:'�
 var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null};
 function isLoggedIn(){return !!state.user;}
 function canManage(){return !!state.user&&!!state.user.canManage;}
-function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();return state.user.branch?[state.user.branch]:[];}
+function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();return (state.user.branches&&state.user.branches.length)?state.user.branches:(state.user.branch?[state.user.branch]:[]);}
 function canEditBranch(b){return editableBranches().indexOf(b)>=0;}
 function clinicToBranch(c){c=String(c||'');var n=c.replace('院區','');return BR.indexOf(n)>=0?n:null;}
-function resolveUser(e){return {id:e.id,name:e.name,title:e.title,clinic:e.clinic,branch:clinicToBranch(e.clinic),canManage:ADMIN_LIST.indexOf(e.id)>=0};}
+function resolveUser(e){var m=ADMIN_LIST.indexOf(e.id)>=0;var b=clinicToBranch(e.clinic);var brs=m?BR.slice():(b?[b]:[]);return {id:e.id,name:e.name,title:e.title,clinic:e.clinic,branch:b,branches:brs,canManage:m};}
 // 正式版：改為 GET ?action=login，由 Apps Script 在伺服器端比對員工編號(A)與密碼(AK)，
 // 僅回傳該使用者的姓名/院區/權限；★ 密碼清單絕不可下載到前端。
 function authenticate(id,pwd){
@@ -289,7 +289,7 @@ function render(){
 }
 function renderUserbox(){
   var u=document.getElementById('userbox');
-  if(state.user){var tag=state.user.canManage?'管理':(state.user.branch?state.user.branch+'院區':'檢視');
+  if(state.user){var nb=(state.user.branches&&state.user.branches.length)||0;var tag=state.user.canManage?'管理':(nb>1?nb+'院區':(state.user.branch?state.user.branch+'院區':'檢視'));
     u.innerHTML='<span class="who">👤 '+state.user.name+'（'+state.user.id+'·'+tag+'）</span><button class="btn btn-ghost btn-sm" onclick="logout()">登出</button>';}
   else u.innerHTML='';
 }
@@ -527,10 +527,9 @@ function renderGate(){
     '<div class="gate-logo"><span class="dot">鶯</span></div>'+
     '<h2>金鶯診所 KPI 指標平台</h2><p class="gate-sub">請以員工編號登入</p>'+
     '<div class="field"><label>員工編號（帳號）</label><input id="gUser" placeholder="例：0017" autocomplete="off" onkeydown="if(event.key===\'Enter\')doLogin()"></div>'+
-    '<div class="field" style="margin-top:10px"><label>密碼</label><input id="gPass" type="password" placeholder="預設為員工編號" onkeydown="if(event.key===\'Enter\')doLogin()"></div>'+
+    '<div class="field" style="margin-top:10px"><label>密碼</label><input id="gPass" type="password" placeholder="密碼與入口網站相同" onkeydown="if(event.key===\'Enter\')doLogin()"></div>'+
     '<div id="gErr" class="gate-err"></div>'+
     '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="doLogin()">登入</button>'+
-    '<div class="gate-note">🔒 帳號為員工編號、密碼取自員工資料庫（AK 預留欄）。<br>測試：<b>0017 / 0017</b>（鶯歌承辦）、<b>0040 / 0040</b>（土城院長）、<b>0011 / williams55</b>（管理）、<b>admin / admin123</b></div>'+
     '</div></div>';
   setTimeout(function(){var g=document.getElementById('gUser');if(g)g.focus();},50);
 }
@@ -540,14 +539,14 @@ function doLogin(){
     gErr('登入中…');
     api('login',{id:id,pwd:pwd}).then(function(res){
       if(!res.ok){gErr(res.error||'登入失敗');return;}
-      state.user=res.user; state.branch=res.user.branch||ALL; state.view='dashboard'; gErr('載入資料中…');
+      state.user=res.user; state.branch=(res.user.branches&&res.user.branches[0])||res.user.branch||ALL; state.view='dashboard'; gErr('載入資料中…');
       return loadData().then(function(){toast('歡迎，'+res.user.name+(res.user.title?'（'+res.user.title+'）':''),'ok');render();});
     }).catch(function(e){gErr('連線失敗：'+(e&&e.message?e.message:e));});
     return;
   }
   var r=authenticate(id,pwd);
   if(r.error){gErr(r.error);return;}
-  state.user=r.user; state.branch=r.user.branch||ALL; state.view='dashboard';
+  state.user=r.user; state.branch=(r.user.branches&&r.user.branches[0])||r.user.branch||ALL; state.view='dashboard';
   toast('歡迎，'+r.user.name+(r.user.title?'（'+r.user.title+'）':''),'ok'); render();
 }
 function openLogin(){logout();}

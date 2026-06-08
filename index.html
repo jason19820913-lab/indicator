@@ -37,7 +37,13 @@
   main{max-width:1280px;margin:0 auto;padding:22px 22px 60px}
   .page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px}
   .page-head h1{font-size:21px;font-weight:700} .page-head .sub{color:var(--sub);font-size:13px;margin-top:3px}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .filters select{border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:14px;background:#fff;color:var(--ink)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;background:#fff;color:var(--sub);padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  .seg button.on{background:var(--brand);color:#fff}
+  .ufbtn{border:1px solid var(--line);background:#fff;color:var(--bad);border-radius:8px;padding:8px 14px;font-size:13.5px;font-weight:600;cursor:pointer}
+  .ufbtn.on{background:var(--bad);color:#fff;border-color:var(--bad)}
   .branchbar{display:flex;gap:7px;flex-wrap:wrap;background:var(--card);border-radius:12px;padding:11px 12px;box-shadow:var(--shadow);margin-bottom:16px;align-items:center}
   .branchbar .grp{font-size:12px;color:var(--sub);font-weight:700;margin:0 2px 0 6px}
   .bbtn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
@@ -243,6 +249,30 @@ function valueAt(ind,branch,period){return branch===ALL?aggValue(ind,period):bra
 function seriesOf(ind,branch){return PERIODS.map(function(p){return valueAt(ind,branch,p);});}
 function latestVal(ind,branch){for(var i=PERIODS.length-1;i>=0;i--){var v=valueAt(ind,branch,PERIODS[i]);if(v!=null)return {v:v,p:PERIODS[i]};}return {v:null,p:null};}
 
+/* ---- 期別篩選（月／季／年）---- */
+function curMonth(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);}
+function monthsAll(){var s={};PERIODS.forEach(function(p){s[p]=1;});s[curMonth()]=1;return Object.keys(s).sort();}
+function quarterOf(m){return m.slice(0,4)+'-Q'+Math.ceil(parseInt(m.slice(5,7),10)/3);}
+function granKeyOf(gran,m){return gran==='quarter'?quarterOf(m):(gran==='year'?m.slice(0,4):m);}
+function periodsForGran(gran){if(gran==='month')return monthsAll();var s={};monthsAll().forEach(function(m){s[granKeyOf(gran,m)]=1;});return Object.keys(s).sort();}
+function monthsOf(gran,key){if(gran==='month')return [key];return monthsAll().filter(function(m){return granKeyOf(gran,m)===key;});}
+function sumParts(ind,branch,months){var sn=0,sd=0,has=false;(DB.records[ind.id]||[]).forEach(function(r){if(months.indexOf(r.period)<0)return;if(branch!==ALL&&r.branch!==branch)return;sn+=r.num;sd+=r.den;has=true;});return has?{num:sn,den:sd}:null;}
+function valueForPeriod(ind,branch,gran,key){if(!key)return null;var p=sumParts(ind,branch,monthsOf(gran,key));if(!p||p.den===0)return null;return calcValue(ind,p.num,p.den);}
+function seriesForGran(ind,branch,gran){return periodsForGran(gran).map(function(k){return valueForPeriod(ind,branch,gran,k);});}
+function curPeriod(){var list=periodsForGran(state.gran);if(state.period&&list.indexOf(state.period)>=0)return state.period;return list.length?list[list.length-1]:null;}
+function fillStatus(ind,branch,gran,key){var months=monthsOf(gran,key),recs=DB.records[ind.id]||[],filled=0;var expected=(branch===ALL?BR.length:1)*months.length;months.forEach(function(m){if(branch===ALL){var bs={};recs.forEach(function(r){if(r.period===m)bs[r.branch]=1;});filled+=Object.keys(bs).length;}else{if(recs.some(function(r){return r.period===m&&r.branch===branch;}))filled++;}});return {filled:filled,expected:expected};}
+function isUnfilled(ind){var fs=fillStatus(ind,state.branch,state.gran,curPeriod());return fs.filled<fs.expected;}
+function fillBadge(fs){
+  if(fs.expected<=1) return fs.filled>=1?'<span class="pill good">已填</span>':'<span class="pill bad">未填</span>';
+  if(fs.filled===0) return '<span class="pill bad">未填 0/'+fs.expected+'</span>';
+  if(fs.filled<fs.expected) return '<span class="pill warn">'+fs.filled+'/'+fs.expected+'</span>';
+  return '<span class="pill good">'+fs.filled+'/'+fs.expected+'</span>';
+}
+function granLabel(){return {month:'月',quarter:'季',year:'年'}[state.gran]||'月';}
+function setGran(g){state.gran=g;state.period=null;render();}
+function setPeriod(p){state.period=p;render();}
+function toggleUnfilled(){state.onlyUnfilled=!state.onlyUnfilled;render();}
+
 function evalThreshold(ind,v){
   if(v==null) return {status:'none',label:'無資料'};
   var t=ind.thr;
@@ -255,7 +285,7 @@ function evalThreshold(ind,v){
 function statusColor(s){return {good:'#1aa179',warn:'#d99100',bad:'#d64545',none:'#9aa3b2'}[s]||'#9aa3b2';}
 function thrTypeLabel(t){return {min:'越高越好',max:'越低越好',range:'區間達標',multi:'多級門檻'}[t]||t;}
 
-var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null};
+var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null,gran:'month',period:null,onlyUnfilled:false};
 function isLoggedIn(){return !!state.user;}
 function canManage(){return !!state.user&&!!state.user.canManage;}
 function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();return (state.user.branches&&state.user.branches.length)?state.user.branches:(state.user.branch?[state.user.branch]:[]);}
@@ -302,35 +332,47 @@ function branchBar(){
 }
 function viewDashboard(){
   var cats=['全部'].concat(uniqueCats());
-  var inds=DB.indicators.filter(function(i){return i.active;}).filter(function(i){return state.filterCat==='全部'||i.cat===state.filterCat;});
+  var gran=state.gran, key=curPeriod(); state.period=key;
   var actives=DB.indicators.filter(function(i){return i.active;});
+  var inds=actives.filter(function(i){return state.filterCat==='全部'||i.cat===state.filterCat;});
+  var unfilledCount=0; actives.forEach(function(i){if(isUnfilled(i))unfilledCount++;});
+  if(state.onlyUnfilled) inds=inds.filter(isUnfilled);
   var g=0,w=0,b=0;
-  actives.forEach(function(i){var s=evalThreshold(i,latestVal(i,state.branch).v).status;if(s==='good')g++;else if(s==='warn')w++;else if(s==='bad')b++;});
+  actives.forEach(function(i){var s=evalThreshold(i,valueForPeriod(i,state.branch,gran,key)).status;if(s==='good')g++;else if(s==='warn')w++;else if(s==='bad')b++;});
   var scope=state.branch===ALL?'全院區加總':state.branch+'院區';
-  var html='<div class="page-head"><div><h1>指標儀表板</h1><div class="sub">目前檢視：<b style="color:var(--brand)">'+scope+'</b>　·　最新期別 2026-05　·　共 '+actives.length+' 項啟用指標</div></div>'+
-    '<div class="filters"><select onchange="setCat(this.value)">'+cats.map(function(c){return '<option '+(c===state.filterCat?'selected':'')+'>'+c+'</option>';}).join('')+'</select></div></div>';
+  var periods=periodsForGran(gran);
+  var html='<div class="page-head"><div><h1>指標儀表板</h1><div class="sub">檢視：<b style="color:var(--brand)">'+scope+'</b>　·　'+granLabel()+'別 <b>'+(key||'—')+'</b>　·　共 '+actives.length+' 項啟用指標</div></div>'+
+    '<div class="filters">'+
+    '<div class="seg">'+[['month','月'],['quarter','季'],['year','年']].map(function(o){return '<button class="'+(gran===o[0]?'on':'')+'" onclick="setGran(\''+o[0]+'\')">'+o[1]+'</button>';}).join('')+'</div>'+
+    '<select onchange="setPeriod(this.value)">'+periods.map(function(p){return '<option '+(p===key?'selected':'')+'>'+p+'</option>';}).join('')+'</select>'+
+    '<select onchange="setCat(this.value)">'+cats.map(function(c){return '<option '+(c===state.filterCat?'selected':'')+'>'+c+'</option>';}).join('')+'</select>'+
+    '<button class="ufbtn'+(state.onlyUnfilled?' on':'')+'" onclick="toggleUnfilled()">⚠ 未填報 '+unfilledCount+'</button>'+
+    '</div></div>';
   html+=branchBar();
   html+='<div class="strip"><div class="s t"><div class="n">'+actives.length+'</div><div class="l">啟用指標</div></div>'+
     '<div class="s g"><div class="n">'+g+'</div><div class="l">達標</div></div>'+
     '<div class="s w"><div class="n">'+w+'</div><div class="l">警示</div></div>'+
     '<div class="s b"><div class="n">'+b+'</div><div class="l">未達標</div></div></div>';
-  html+='<div class="panel"><table><thead><tr><th>指標</th><th>分類</th><th class="num">最新數值</th><th class="ctr sparkcell">趨勢</th><th class="ctr">判定</th><th class="hsm">目標</th><th class="hsm">頻率/單位</th></tr></thead><tbody>';
-  if(!inds.length) html+='<tr><td colspan="7" class="empty">此分類尚無指標</td></tr>';
+  html+='<div class="panel"><table><thead><tr><th>指標</th><th>分類</th><th class="num">'+granLabel()+'別數值</th><th class="ctr sparkcell">趨勢</th><th class="ctr">判定</th><th class="ctr">填報</th><th class="hsm">目標</th></tr></thead><tbody>';
+  if(!inds.length) html+='<tr><td colspan="7" class="empty">'+(state.onlyUnfilled?'本期已全部填報 🎉':'此分類尚無指標')+'</td></tr>';
   inds.forEach(function(ind){
-    var lv=latestVal(ind,state.branch); var ev=evalThreshold(ind,lv.v);
+    var v=valueForPeriod(ind,state.branch,gran,key); var ev=evalThreshold(ind,v);
+    var fs=fillStatus(ind,state.branch,gran,key);
     html+='<tr onclick="openDetail(\''+ind.id+'\')"><td><div class="ind-name">'+ind.name+'</div><div class="ind-def">'+ind.num+' ÷ '+ind.den+'</div></td>'+
       '<td><span class="cat">'+ind.cat+'</span></td>'+
-      '<td class="num"><span class="bigval">'+(lv.v==null?'—':lv.v)+'<span class="u">'+ind.unit+'</span></span></td>'+
+      '<td class="num"><span class="bigval">'+(v==null?'—':v)+'<span class="u">'+ind.unit+'</span></span></td>'+
       '<td class="ctr sparkcell"><div class="sparkwrap"><canvas id="sp_'+ind.id+'" width="120" height="38"></canvas></div></td>'+
       '<td class="ctr"><span class="pill '+ev.status+'">'+ev.label+'</span></td>'+
-      '<td class="hsm">'+ind.target+'</td><td class="hsm"><span class="branchtag">'+ind.freq+'報 · '+ind.unit+'</span></td></tr>';
+      '<td class="ctr">'+fillBadge(fs)+'</td>'+
+      '<td class="hsm">'+ind.target+'</td></tr>';
   });
   return html+'</tbody></table></div>';
 }
 function drawSparks(){
-  DB.indicators.filter(function(i){return i.active&&(state.filterCat==='全部'||i.cat===state.filterCat);}).forEach(function(ind){
+  var gran=state.gran, labels=periodsForGran(gran);
+  DB.indicators.filter(function(i){return i.active&&(state.filterCat==='全部'||i.cat===state.filterCat)&&(!state.onlyUnfilled||isUnfilled(i));}).forEach(function(ind){
     var el=document.getElementById('sp_'+ind.id); if(!el)return;
-    new Chart(el,{type:'line',data:{labels:PERIODS,datasets:[{data:seriesOf(ind,state.branch),borderColor:'#1f6feb',backgroundColor:'rgba(31,111,235,.12)',fill:true,tension:.35,pointRadius:0,borderWidth:2,spanGaps:true}]},
+    new Chart(el,{type:'line',data:{labels:labels,datasets:[{data:seriesForGran(ind,state.branch,gran),borderColor:'#1f6feb',backgroundColor:'rgba(31,111,235,.12)',fill:true,tension:.35,pointRadius:0,borderWidth:2,spanGaps:true}]},
       options:{responsive:false,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:false}},scales:{x:{display:false},y:{display:false}}}});
   });
 }

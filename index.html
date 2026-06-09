@@ -84,6 +84,10 @@
   .field input:focus,.field select:focus{outline:none;border-color:var(--brand)}
   .calc{background:#eaf1ff;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;margin:8px 0 14px}
   .calc .lab{font-size:13px;color:var(--brand-d);font-weight:600} .calc .res{font-size:22px;font-weight:800;color:var(--brand)}
+  .bfgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+  .bfden label{display:block;font-size:12.5px;color:var(--sub);margin-bottom:4px;font-weight:600}
+  .bfden input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+  .bfhint{font-size:12px;color:var(--sub);background:#f7f9fc;border-radius:8px;padding:9px 11px;margin:6px 0 0}
   .bar-row{display:grid;grid-template-columns:60px 1fr 64px;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px}
   .bar-track{background:#eef1f6;border-radius:6px;height:16px;overflow:hidden} .bar-fill{height:100%;border-radius:6px}
   .bar-val{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
@@ -131,6 +135,7 @@
   <div class="logo"><span class="dot">鶯</span> 金鶯診所 · KPI 指標平台</div>
   <nav class="nav" id="nav">
     <button data-view="dashboard" class="active">儀表板</button>
+    <button data-view="batch" id="navBatch">批次填報</button>
     <button data-view="admin" id="navAdmin">指標維護</button>
   </nav>
   <div class="userbox" id="userbox"></div>
@@ -285,7 +290,7 @@ function evalThreshold(ind,v){
 function statusColor(s){return {good:'#1aa179',warn:'#d99100',bad:'#d64545',none:'#9aa3b2'}[s]||'#9aa3b2';}
 function thrTypeLabel(t){return {min:'越高越好',max:'越低越好',range:'區間達標',multi:'多級門檻'}[t]||t;}
 
-var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null,gran:'month',period:null,onlyUnfilled:false};
+var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null,gran:'month',period:null,onlyUnfilled:false,bfBranch:null,bfPeriod:null};
 function isLoggedIn(){return !!state.user;}
 function canManage(){return !!state.user&&!!state.user.canManage;}
 function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();return (state.user.branches&&state.user.branches.length)?state.user.branches:(state.user.branch?[state.user.branch]:[]);}
@@ -310,12 +315,15 @@ function render(){
   if(!isLoggedIn()){ renderGate(); return; }
   document.querySelectorAll('#nav button').forEach(function(b){b.classList.toggle('active',b.dataset.view===state.view);});
   var na=document.getElementById('navAdmin'); if(na) na.style.display=isLoggedIn()?'':'none';
+  var nbt=document.getElementById('navBatch'); if(nbt) nbt.style.display=editableBranches().length?'':'none';
   var app=document.getElementById('app');
   if(state.view==='dashboard') app.innerHTML=viewDashboard();
   else if(state.view==='detail') app.innerHTML=viewDetail();
   else if(state.view==='admin') app.innerHTML=viewAdmin();
+  else if(state.view==='batch') app.innerHTML=viewBatch();
   if(state.view==='dashboard') drawSparks();
   if(state.view==='detail') drawDetailChart();
+  if(state.view==='batch') bfRecalc();
 }
 function renderUserbox(){
   var u=document.getElementById('userbox');
@@ -480,6 +488,78 @@ function submitRecord(){
   if(PERIODS.indexOf(period)<0){PERIODS.push(period);PERIODS.sort();}
   toast(branch+'院區 '+period+' 已寫入：'+val+ind.unit,'ok');
   render();
+}
+/* ---------------- 批次填報（共用分母只填一次）---------------- */
+function bfDefs(){var inds=DB.indicators.filter(function(i){return i.active;});var defs=[];inds.forEach(function(ind){if(defs.indexOf(ind.den)<0)defs.push(ind.den);});return defs;}
+function viewBatch(){
+  if(!isLoggedIn()) return '<div class="empty">請先登入</div>';
+  var eb=editableBranches();
+  if(!eb.length) return '<div class="empty">您目前沒有可填報的院區</div>';
+  var branch=(state.bfBranch&&eb.indexOf(state.bfBranch)>=0)?state.bfBranch:eb[0]; state.bfBranch=branch;
+  var period=state.bfPeriod||curMonth(); state.bfPeriod=period;
+  var inds=DB.indicators.filter(function(i){return i.active;});
+  var exist={};
+  inds.forEach(function(ind){var r=(DB.records[ind.id]||[]).find(function(x){return x.branch===branch&&x.period===period;});if(r)exist[ind.id]={num:r.num,den:r.den};});
+  var defs=bfDefs();
+  var defVal={};
+  defs.forEach(function(d){var v='';inds.forEach(function(ind){if(ind.den===d&&exist[ind.id]&&exist[ind.id].den!=null&&v==='')v=exist[ind.id].den;});defVal[d]=v;});
+  var html='<div class="page-head"><div><h1>批次填報</h1><div class="sub">相同「分母定義」只需填一次，系統自動帶入其他指標</div></div></div>';
+  html+='<div class="panel"><div class="form-row">'+
+    '<div class="field"><label>院區</label><select onchange="setBfBranch(this.value)">'+eb.map(function(b){return '<option '+(b===branch?'selected':'')+'>'+b+'</option>';}).join('')+'</select></div>'+
+    '<div class="field"><label>期別</label><input id="bfPeriod" value="'+period+'" onchange="setBfPeriod(this.value)"></div></div>';
+  html+='<div class="bfhint">💡 分母定義文字需完全相同才會共用（例如多支指標的分母都填「看診人次」）。改一處分母，所有共用該分母的指標會自動重算。</div>';
+  html+='<h2 style="font-size:15px;margin:14px 0 8px">① 共用分母（填一次）</h2><div class="bfgrid">';
+  defs.forEach(function(d,idx){
+    html+='<div class="bfden"><label>'+esc(d)+'</label><input type="number" id="bd_'+idx+'" value="'+(defVal[d]===''?'':defVal[d])+'" oninput="bfRecalc()" placeholder="輸入數字"></div>';
+  });
+  html+='</div>';
+  html+='<h2 style="font-size:15px;margin:16px 0 8px">② 各指標分子</h2>';
+  html+='<table><thead><tr><th>指標</th><th class="num">分母</th><th class="num">分子</th><th class="num">數值</th><th class="ctr">判定</th></tr></thead><tbody>';
+  inds.forEach(function(ind){
+    var preNum=exist[ind.id]?exist[ind.id].num:'';
+    html+='<tr><td><div class="ind-name">'+ind.name+'</div><div class="ind-def">'+ind.num+' ÷ '+ind.den+'</div></td>'+
+      '<td class="num"><b id="bdv_'+ind.id+'">—</b></td>'+
+      '<td class="num"><input type="number" id="bn_'+ind.id+'" value="'+(preNum===''?'':preNum)+'" oninput="bfRecalc()" style="width:88px;text-align:right;border:1px solid var(--line);border-radius:7px;padding:6px 8px"></td>'+
+      '<td class="num"><b id="bv_'+ind.id+'">—</b> '+ind.unit+'</td>'+
+      '<td class="ctr"><span id="bp_'+ind.id+'" class="pill none">—</span></td></tr>';
+  });
+  html+='</tbody></table>';
+  html+='<button class="btn btn-primary" style="margin-top:14px;width:100%" onclick="batchSubmit()">💾 儲存全部</button>';
+  return html+'</div>';
+}
+function bfRecalc(){
+  var inds=DB.indicators.filter(function(i){return i.active;});var defs=bfDefs();
+  var denByIdx={};defs.forEach(function(d,idx){var el=document.getElementById('bd_'+idx);denByIdx[idx]=(el&&el.value!=='')?parseFloat(el.value):null;});
+  inds.forEach(function(ind){
+    var den=denByIdx[defs.indexOf(ind.den)];
+    var dv=document.getElementById('bdv_'+ind.id);if(dv)dv.textContent=(den==null||isNaN(den))?'—':den;
+    var ne=document.getElementById('bn_'+ind.id);var num=(ne&&ne.value!=='')?parseFloat(ne.value):null;
+    var ve=document.getElementById('bv_'+ind.id),pe=document.getElementById('bp_'+ind.id);
+    if(num==null||isNaN(num)||den==null||isNaN(den)||den===0){if(ve)ve.textContent='—';if(pe){pe.className='pill none';pe.textContent='—';}return;}
+    var val=calcValue(ind,num,den),ev=evalThreshold(ind,val);
+    if(ve)ve.textContent=val;if(pe){pe.className='pill '+ev.status;pe.textContent=ev.label;}
+  });
+}
+function setBfBranch(b){state.bfBranch=b;render();}
+function setBfPeriod(p){state.bfPeriod=p;render();}
+function batchSubmit(){
+  if(!isLoggedIn()){toast('需登入','err');return;}
+  var branch=state.bfBranch;var pe=document.getElementById('bfPeriod');var period=(pe?pe.value:state.bfPeriod||'').trim();
+  if(!canEditBranch(branch)){toast('您沒有「'+branch+'」院區的填報權限','err');return;}
+  if(!period){toast('請輸入期別','err');return;}
+  var inds=DB.indicators.filter(function(i){return i.active;});var defs=bfDefs();
+  var denByIdx={};defs.forEach(function(d,idx){var el=document.getElementById('bd_'+idx);denByIdx[idx]=(el&&el.value!=='')?parseFloat(el.value):null;});
+  var jobs=[];
+  inds.forEach(function(ind){var ne=document.getElementById('bn_'+ind.id);var num=(ne&&ne.value!=='')?parseFloat(ne.value):null;var den=denByIdx[defs.indexOf(ind.den)];if(num==null||isNaN(num)||den==null||isNaN(den)||den===0)return;jobs.push({ind:ind,num:num,den:den});});
+  if(!jobs.length){toast('沒有可儲存的資料','err');return;}
+  if(LIVE()){
+    toast('儲存中…','ok');var i=0;
+    (function next(){if(i>=jobs.length){loadData().then(function(){toast('已儲存 '+jobs.length+' 筆','ok');render();});return;}var j=jobs[i++];api('saveRecord',{indId:j.ind.id,branch:branch,period:period,num:j.num,den:j.den,by:state.user.id}).then(function(){next();}).catch(function(){toast('部分儲存失敗','err');});})();
+    return;
+  }
+  jobs.forEach(function(j){var recs=DB.records[j.ind.id]=DB.records[j.ind.id]||[];var ex=recs.find(function(r){return r.period===period&&r.branch===branch;});var v=calcValue(j.ind,j.num,j.den);if(ex){ex.num=j.num;ex.den=j.den;ex.value=v;ex.by=state.user.name;ex.at=today();}else recs.push({period:period,branch:branch,num:j.num,den:j.den,value:v,by:state.user.name,at:today()});});
+  if(PERIODS.indexOf(period)<0){PERIODS.push(period);PERIODS.sort();}
+  toast('已儲存 '+jobs.length+' 筆','ok');render();
 }
 function viewAdmin(){
   if(!isLoggedIn()) return '<div class="empty">⚠️ 請先登入<br><br><button class="btn btn-primary" onclick="openLogin()">登入</button></div>';

@@ -572,7 +572,7 @@ function viewAdmin(){
     html+='<tr><td>'+ind.id+'</td><td><b>'+ind.name+'</b></td><td>'+ind.cat+'</td><td style="font-size:12.5px;color:var(--sub)">'+ind.num+' ÷ '+ind.den+'</td><td>'+ind.unit+'</td>'+
       '<td><span class="thr-tag">'+thrTypeLabel(ind.thrType)+'</span></td><td>'+ind.target+'</td>'+
       '<td>'+(ind.active?'<span class="pill good">啟用</span>':'<span class="pill none">停用</span>')+'</td>'+
-      (manage?'<td class="row-actions"><button class="btn btn-light btn-sm" onclick="openEdit(\''+ind.id+'\')">修改</button><button class="btn btn-light btn-sm" onclick="toggleActive(\''+ind.id+'\')">'+(ind.active?'停用':'啟用')+'</button></td>':'')+'</tr>';
+      (manage?'<td class="row-actions"><button class="btn btn-light btn-sm" onclick="openEdit(\''+ind.id+'\')">修改</button><button class="btn btn-light btn-sm" onclick="toggleActive(\''+ind.id+'\')">'+(ind.active?'停用':'啟用')+'</button><button class="btn btn-light btn-sm" style="color:var(--bad)" onclick="deleteIndicator(\''+ind.id+'\')">刪除</button></td>':'')+'</tr>';
   });
   return html+'</tbody></table></div>';
 }
@@ -642,6 +642,22 @@ function autoTarget(t,thr,unit){
 function toggleActive(id){
   if(LIVE()){api('toggleIndicator',{id:id}).then(function(res){if(!res.ok){toast(res.error||'失敗','err');return;}return loadData().then(render);}).catch(function(){toast('連線失敗','err');});return;}
   var ind=DB.indicators.find(function(i){return i.id===id;});ind.active=!ind.active;toast(ind.name+(ind.active?' 已啟用':' 已停用'),'ok');render();
+}
+function deleteIndicator(id){
+  if(!canManage()){toast('需主管權限','err');return;}
+  var ind=DB.indicators.find(function(i){return i.id===id;});
+  if(!ind) return;
+  if(!confirm('確定刪除「'+ind.name+'」（'+id+'）？\n此指標的所有歷史填報數值將一併刪除，無法復原。\n若只是暫時不使用，建議改用「停用」。')) return;
+  if(LIVE()){
+    api('deleteIndicator',{id:id,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'刪除失敗','err');return;}
+      return loadData().then(function(){toast('已刪除「'+ind.name+'」','ok');render();});
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  DB.indicators=DB.indicators.filter(function(i){return i.id!==id;});
+  delete DB.records[id];
+  toast('已刪除「'+ind.name+'」','ok');render();
 }
 function renderGate(){
   document.getElementById('app').innerHTML=

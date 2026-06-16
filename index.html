@@ -373,16 +373,28 @@ function viewDashboard(){
     '<div class="s b"><div class="n">'+b+'</div><div class="l">未達標</div></div></div>';
   html+='<div class="panel"><table><thead><tr><th>指標</th><th>分類</th><th class="num">'+granLabel()+'別數值</th><th class="ctr sparkcell">趨勢</th><th class="ctr">判定</th><th class="ctr">填報</th><th class="hsm">目標</th></tr></thead><tbody>';
   if(!inds.length) html+='<tr><td colspan="7" class="empty">'+(state.onlyUnfilled?'本期已全部填報 🎉':'此分類尚無指標')+'</td></tr>';
+  var multiMonth=monthsOf(gran,key).length>1;
   inds.forEach(function(ind){
     var v=valueForPeriod(ind,state.branch,gran,key); var ev=evalThreshold(ind,v);
     var fs=fillStatus(ind,state.branch,gran,key);
-    html+='<tr onclick="openDetail(\''+ind.id+'\')"><td><div class="ind-name">'+ind.name+'</div><div class="ind-def">'+ind.num+' ÷ '+ind.den+'</div></td>'+
+    var notes=notesFor(ind,state.branch,gran,key);
+    var rid='dnote_'+ind.id;
+    var caret=notes.length?'<div style="margin-top:5px"><button class="note-toggle" onclick="event.stopPropagation();toggleNote(\''+rid+'\',this)">📝 原因／改善對策 ▾</button></div>':'';
+    html+='<tr onclick="openDetail(\''+ind.id+'\')"><td><div class="ind-name">'+ind.name+'</div><div class="ind-def">'+ind.num+' ÷ '+ind.den+'</div>'+caret+'</td>'+
       '<td><span class="cat">'+ind.cat+'</span></td>'+
       '<td class="num"><span class="bigval">'+(v==null?'—':v)+'<span class="u">'+ind.unit+'</span></span></td>'+
       '<td class="ctr sparkcell"><div class="sparkwrap"><canvas id="sp_'+ind.id+'" width="120" height="38"></canvas></div></td>'+
       '<td class="ctr"><span class="pill '+ev.status+'">'+ev.label+'</span></td>'+
       '<td class="ctr">'+fillBadge(fs)+'</td>'+
       '<td class="hsm">'+ind.target+'</td></tr>';
+    if(notes.length){
+      var inner='';
+      notes.forEach(function(n){
+        var parts=[]; if(state.branch===ALL)parts.push(n.branch+'院區'); if(multiMonth)parts.push(n.period);
+        inner+=noteCard(parts.join(' · '),n.cause,n.plan);
+      });
+      html+='<tr id="'+rid+'" class="note-row" style="display:none"><td colspan="7"><div class="note-wrap">'+inner+'</div></td></tr>';
+    }
   });
   return html+'</tbody></table></div>';
 }
@@ -417,7 +429,7 @@ function viewDetail(){
     if(hasNote){
       var inner='';
       if(state.branch===ALL){
-        r.notes.forEach(function(n){inner+=noteCard(n.branch,n.cause,n.plan);});
+        r.notes.forEach(function(n){inner+=noteCard(n.branch+'院區',n.cause,n.plan);});
       }else{
         inner=noteCard(null,r.cause,r.plan);
       }
@@ -518,11 +530,20 @@ function submitRecord(){
   toast(branch+'院區 '+period+' 已寫入：'+val+ind.unit,'ok');
   render();
 }
-function noteCard(branch,cause,plan){
-  var head=branch?'<div class="note-branch">'+esc(branch)+'院區</div>':'';
+function noteCard(label,cause,plan){
+  var head=label?'<div class="note-branch">'+esc(label)+'</div>':'';
   var c=cause&&cause.trim()?'<div class="note-block"><span class="note-lab">原因分析</span><div class="note-text">'+esc(cause).replace(/\n/g,'<br>')+'</div></div>':'';
-  var p=plan&&plan.trim()?'<div class="note-block"><span class="note-lab plan">改善計畫</span><div class="note-text">'+esc(plan).replace(/\n/g,'<br>')+'</div></div>':'';
+  var p=plan&&plan.trim()?'<div class="note-block"><span class="note-lab plan">改善對策</span><div class="note-text">'+esc(plan).replace(/\n/g,'<br>')+'</div></div>':'';
   return '<div class="note-card">'+head+c+p+'</div>';
+}
+function notesFor(ind,branch,gran,key){
+  var months=monthsOf(gran,key),out=[];
+  (DB.records[ind.id]||[]).forEach(function(r){
+    if(months.indexOf(r.period)<0) return;
+    if(branch!==ALL && r.branch!==branch) return;
+    if((r.cause&&r.cause.trim())||(r.plan&&r.plan.trim())) out.push({branch:r.branch,period:r.period,cause:r.cause||'',plan:r.plan||''});
+  });
+  return out.sort(function(a,b){return a.period<b.period?1:-1;});
 }
 function toggleNote(rid,btn){
   var el=document.getElementById(rid); if(!el)return;

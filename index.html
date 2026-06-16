@@ -147,6 +147,7 @@
     <button data-view="dashboard" class="active">儀表板</button>
     <button data-view="batch" id="navBatch">批次填報</button>
     <button data-view="admin" id="navAdmin">指標維護</button>
+    <button data-view="branches" id="navBranch">院區管理</button>
   </nav>
   <div class="userbox" id="userbox"></div>
 </header>
@@ -218,11 +219,20 @@ function loadData(){
   return api('getAll',{}).then(function(res){
     if(!res.ok) throw new Error(res.error||'載入失敗');
     DB.indicators=res.indicators||[]; DB.records=recordsToMap(res.records); rebuildPeriods();
+    if(res.branches&&res.branches.length) setBranches(res.branches);
   });
+}
+// 以後端院區清單覆蓋前端院區（ALL_BRANCHES 含停用；BRANCHES/BR 僅啟用）
+var ALL_BRANCHES=[];
+function setBranches(list){
+  ALL_BRANCHES=list.map(function(b){return {name:b.name,grp:b.grp||'',active:b.active!==false};});
+  BRANCHES=ALL_BRANCHES.filter(function(b){return b.active;}).map(function(b){return {name:b.name,grp:b.grp};});
+  BR=BRANCHES.map(function(b){return b.name;});
 }
 var DB={indicators:[],records:{}};
 
 function seed(){
+  ALL_BRANCHES=BRANCHES.map(function(b){return {name:b.name,grp:b.grp,active:true};});
   DB.indicators=[
     {id:'KPI001',name:'就診回診率',cat:'醫療品質',unit:'%',num:'回診人數',den:'應回診人數',freq:'月',thrType:'min',thr:{target:80,warn:75},owner:'醫務部',target:'≧ 80%',active:true},
     {id:'KPI002',name:'初診轉複診率',cat:'營運',unit:'%',num:'轉複診初診數',den:'初診總數',freq:'月',thrType:'min',thr:{target:55,warn:48},owner:'櫃檯',target:'≧ 55%',active:true},
@@ -325,11 +335,13 @@ function render(){
   if(!isLoggedIn()){ renderGate(); return; }
   document.querySelectorAll('#nav button').forEach(function(b){b.classList.toggle('active',b.dataset.view===state.view);});
   var na=document.getElementById('navAdmin'); if(na) na.style.display=isLoggedIn()?'':'none';
+  var nbr=document.getElementById('navBranch'); if(nbr) nbr.style.display=canManage()?'':'none';
   var nbt=document.getElementById('navBatch'); if(nbt) nbt.style.display=editableBranches().length?'':'none';
   var app=document.getElementById('app');
   if(state.view==='dashboard') app.innerHTML=viewDashboard();
   else if(state.view==='detail') app.innerHTML=viewDetail();
   else if(state.view==='admin') app.innerHTML=viewAdmin();
+  else if(state.view==='branches') app.innerHTML=viewBranches();
   else if(state.view==='batch') app.innerHTML=viewBatch();
   if(state.view==='dashboard') drawSparks();
   if(state.view==='detail'){ drawDetailChart(); loadReason(); }
@@ -644,6 +656,78 @@ function viewAdmin(){
       (manage?'<td class="row-actions"><button class="btn btn-light btn-sm" onclick="openEdit(\''+ind.id+'\')">修改</button><button class="btn btn-light btn-sm" onclick="toggleActive(\''+ind.id+'\')">'+(ind.active?'停用':'啟用')+'</button><button class="btn btn-light btn-sm" style="color:var(--bad)" onclick="deleteIndicator(\''+ind.id+'\')">刪除</button></td>':'')+'</tr>';
   });
   return html+'</tbody></table></div>';
+}
+function viewBranches(){
+  if(!isLoggedIn()) return '<div class="empty">⚠️ 請先登入<br><br><button class="btn btn-primary" onclick="openLogin()">登入</button></div>';
+  if(!canManage()) return '<div class="empty">院區管理僅限主管使用</div>';
+  var list=ALL_BRANCHES.length?ALL_BRANCHES:BRANCHES.map(function(b){return {name:b.name,grp:b.grp,active:true};});
+  var actCnt=list.filter(function(b){return b.active;}).length;
+  var html='<div class="page-head"><div><h1>院區管理</h1><div class="sub">新增、改名、啟用／停用院區（儲存後即時套用到全系統，無需改程式）</div></div></div>';
+  html+='<div class="panel"><h2 style="font-size:15px;margin:0 0 10px">＋ 新增院區</h2>'+
+    '<div class="form-row" style="align-items:flex-end">'+
+    '<div class="field"><label>院區名稱 *</label><input id="nb_name" placeholder="例：中壢"></div>'+
+    '<div class="field" style="max-width:160px"><label>群組（縣市）</label><input id="nb_grp" placeholder="例：桃園"></div>'+
+    '<div class="field" style="max-width:120px"><button class="btn btn-primary" style="width:100%" onclick="addBranch()">新增</button></div>'+
+    '</div><div class="thr-help">院區名稱需唯一；新增後該院區會立即出現在儀表板、填報與批次填報的院區列。停用的院區不再顯示於填報，但歷史數值仍保留。</div></div>';
+  html+='<div class="panel" style="margin-top:18px"><div class="admin-tools"><div class="sub">共 '+list.length+' 個院區（啟用 '+actCnt+'）</div></div>'+
+    '<table><thead><tr><th>院區</th><th>群組</th><th>狀態</th><th>操作</th></tr></thead><tbody>';
+  if(!list.length) html+='<tr><td colspan="4" class="empty">尚無院區</td></tr>';
+  list.forEach(function(b){
+    var nm=esc(b.name);
+    html+='<tr><td><b>'+nm+'</b></td><td>'+(esc(b.grp)||'<span style="color:var(--sub)">—</span>')+'</td>'+
+      '<td>'+(b.active?'<span class="pill good">啟用</span>':'<span class="pill none">停用</span>')+'</td>'+
+      '<td class="row-actions"><button class="btn btn-light btn-sm" onclick="renameBranch(\''+nm+'\')">改名</button>'+
+      '<button class="btn btn-light btn-sm" onclick="toggleBranch(\''+nm+'\')">'+(b.active?'停用':'啟用')+'</button></td></tr>';
+  });
+  return html+'</tbody></table></div>';
+}
+function addBranch(){
+  if(!canManage()){toast('需主管權限','err');return;}
+  var name=gv('nb_name'),grp=gv('nb_grp');
+  if(!name){toast('請輸入院區名稱','err');return;}
+  if(ALL_BRANCHES.some(function(b){return b.name===name;})){toast('院區「'+name+'」已存在','err');return;}
+  if(LIVE()){
+    api('saveBranch',{name:name,grp:grp,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'新增失敗','err');return;}
+      return loadData().then(function(){toast('已新增院區「'+name+'」','ok');render();});
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  ALL_BRANCHES.push({name:name,grp:grp,active:true});syncBranches();
+  toast('已新增院區「'+name+'」','ok');render();
+}
+function renameBranch(name){
+  if(!canManage()){toast('需主管權限','err');return;}
+  var nv=prompt('將院區「'+name+'」改名為：\n（注意：歷史填報數值仍以舊名稱儲存，改名不會自動搬移舊資料）',name);
+  if(nv==null)return; nv=String(nv).trim();
+  if(!nv||nv===name)return;
+  if(ALL_BRANCHES.some(function(b){return b.name===nv;})){toast('院區「'+nv+'」已存在','err');return;}
+  var b=ALL_BRANCHES.find(function(x){return x.name===name;});var grp=b?b.grp:'';
+  if(LIVE()){
+    api('saveBranch',{name:nv,grp:grp,old:name,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'改名失敗','err');return;}
+      return loadData().then(function(){toast('已改名為「'+nv+'」','ok');render();});
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  if(b)b.name=nv;syncBranches();toast('已改名為「'+nv+'」','ok');render();
+}
+function toggleBranch(name){
+  if(!canManage()){toast('需主管權限','err');return;}
+  if(LIVE()){
+    api('toggleBranch',{name:name,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'失敗','err');return;}
+      return loadData().then(function(){toast('院區「'+name+'」已'+(res.active?'啟用':'停用'),'ok');render();});
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  var b=ALL_BRANCHES.find(function(x){return x.name===name;});if(!b)return;b.active=!b.active;syncBranches();
+  toast('院區「'+name+'」已'+(b.active?'啟用':'停用'),'ok');render();
+}
+// 離線模式：由 ALL_BRANCHES 重算 BRANCHES/BR
+function syncBranches(){
+  BRANCHES=ALL_BRANCHES.filter(function(b){return b.active;}).map(function(b){return {name:b.name,grp:b.grp};});
+  BR=BRANCHES.map(function(b){return b.name;});
 }
 function openEdit(id){
   if(!canManage()){toast('需主管權限','err');return;}

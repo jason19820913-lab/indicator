@@ -147,7 +147,7 @@
     <button data-view="dashboard" class="active">儀表板</button>
     <button data-view="batch" id="navBatch">批次填報</button>
     <button data-view="admin" id="navAdmin">指標維護</button>
-    <button data-view="branches" id="navBranch">院區管理</button>
+    <button data-view="branches" id="navBranch">系統設定</button>
   </nav>
   <div class="userbox" id="userbox"></div>
 </header>
@@ -171,7 +171,13 @@ var BRANCHES=[
   {name:'大溪',grp:'桃園'},{name:'大竹',grp:'桃園'},{name:'平鎮',grp:'桃園'},{name:'埔心',grp:'桃園'},{name:'觀音',grp:'桃園'}
 ];
 var BR=BRANCHES.map(function(b){return b.name;});
-var PERIODS=['2025-12','2026-01','2026-02','2026-03','2026-04','2026-05'];
+var PERIODS=['2025-12','2026-01','2026-02','2026-03','2026-04','2026-05']; // 離線示範種子月份；正式模式由 rebuildPeriods() 依「收案起始月份～本月」連續產生
+// 系統設定（正式模式由後端「系統設定」分頁載入；startMonth 空白＝以最早填報月份為起點）
+var SETTINGS={startMonth:'',whitelistOnly:'1'};   // whitelistOnly '1'＝僅白名單可填報，其他人唯讀
+function isWhitelistOnly(){var v=String(SETTINGS.whitelistOnly||'').trim().toLowerCase();return v==='1'||v==='true'||v==='是'||v==='on';}
+// 填報白名單（＝試算表「院區編輯權限」分頁）：[{branch,id,name,note}]；正式模式由 listPerm 載入（主管限定），null＝尚未載入
+var PERM=null;
+var PERM_SAMPLE=[{branch:'鶯歌',id:'0017',name:'陳心驊',note:'示範'}]; // 離線示範用
 // === 員工資料庫（前端原型僅內嵌測試子集；正式版由 Apps Script 在伺服器端讀「員工資料」表驗證）===
 // 來源欄位：A=員工編號(帳號) B=姓名 C=所屬院區 F=職稱 AG=在職狀態 AK=預留(密碼)
 var EMP_SAMPLE=[
@@ -211,14 +217,14 @@ function recordsToMap(arr){
   var m={}; (arr||[]).forEach(function(r){(m[r.indId]=m[r.indId]||[]).push({period:r.period,branch:r.branch,num:r.num,den:r.den,value:r.value,by:r.by,at:r.at,cause:r.cause||'',plan:r.plan||''});});
   return m;
 }
-function rebuildPeriods(){
-  var s={}; Object.keys(DB.records).forEach(function(id){DB.records[id].forEach(function(r){if(r.period)s[r.period]=1;});});
-  var arr=Object.keys(s).sort(); if(arr.length) PERIODS=arr;
-}
+// PERIODS ＝ 收案起始月份 ～ 本月（或最晚填報月）的「連續」月份清單，不再只列有填報的月份
+function rebuildPeriods(){ PERIODS=monthsAll(); }
 function loadData(){
   return api('getAll',{}).then(function(res){
     if(!res.ok) throw new Error(res.error||'載入失敗');
-    DB.indicators=res.indicators||[]; DB.records=recordsToMap(res.records); rebuildPeriods();
+    DB.indicators=res.indicators||[]; DB.records=recordsToMap(res.records);
+    if(res.settings) Object.keys(res.settings).forEach(function(k){SETTINGS[k]=res.settings[k];});
+    rebuildPeriods();
     if(res.branches&&res.branches.length) setBranches(res.branches);
   });
 }
@@ -259,6 +265,7 @@ function seed(){
       });
     });
   });
+  rebuildPeriods();
 }
 function calcValue(ind,num,den){
   if(den===0||den==null) return null;
@@ -276,7 +283,20 @@ function latestVal(ind,branch){for(var i=PERIODS.length-1;i>=0;i--){var v=valueA
 
 /* ---- 期別篩選（月／季／年）---- */
 function curMonth(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);}
-function monthsAll(){var s={};PERIODS.forEach(function(p){s[p]=1;});s[curMonth()]=1;return Object.keys(s).sort();}
+function isYM(s){return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s||''));}
+function addMonths(ym,n){var y=parseInt(ym.slice(0,4),10),m=parseInt(ym.slice(5,7),10)-1+n;y+=Math.floor(m/12);m=((m%12)+12)%12;return y+'-'+('0'+(m+1)).slice(-2);}
+// 所有實際有填報的月份（排序）
+function recordMonths(){var s={};Object.keys(DB.records).forEach(function(id){DB.records[id].forEach(function(r){if(isYM(r.period))s[r.period]=1;});});return Object.keys(s).sort();}
+// 收案起始月份：優先用系統設定；未設定 → 最早填報月份；都沒有 → 本月
+function startMonth(){var s=String(SETTINGS.startMonth||'').trim();if(isYM(s))return s;var rm=recordMonths();return rm.length?rm[0]:curMonth();}
+// 月份清單＝起始月 ～ 本月（若有晚於本月的填報則延伸到該月）之「連續」月份；早於起始月的歷史填報不列入
+function monthsAll(){
+  var start=startMonth(), end=curMonth();
+  recordMonths().forEach(function(m){if(m>end)end=m;});
+  if(start>end) end=start;
+  var out=[]; for(var m=start;m<=end&&out.length<600;m=addMonths(m,1)) out.push(m);
+  return out;
+}
 function quarterOf(m){return m.slice(0,4)+'-Q'+Math.ceil(parseInt(m.slice(5,7),10)/3);}
 function granKeyOf(gran,m){return gran==='quarter'?quarterOf(m):(gran==='year'?m.slice(0,4):m);}
 function periodsForGran(gran){if(gran==='month')return monthsAll();var s={};monthsAll().forEach(function(m){s[granKeyOf(gran,m)]=1;});return Object.keys(s).sort();}
@@ -313,10 +333,21 @@ function thrTypeLabel(t){return {min:'越高越好',max:'越低越好',range:'�
 var state={view:'dashboard',user:null,branch:ALL,detailId:null,filterCat:'全部',editId:null,gran:'month',period:null,onlyUnfilled:false,bfBranch:null,bfPeriod:null};
 function isLoggedIn(){return !!state.user;}
 function canManage(){return !!state.user&&!!state.user.canManage;}
-function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();return (state.user.branches&&state.user.branches.length)?state.user.branches:(state.user.branch?[state.user.branch]:[]);}
+function editableBranches(){if(!state.user)return [];if(state.user.canManage)return BR.slice();if(state.user.canFill===false)return [];return (state.user.branches&&state.user.branches.length)?state.user.branches:(state.user.branch?[state.user.branch]:[]);}
 function canEditBranch(b){return editableBranches().indexOf(b)>=0;}
 function clinicToBranch(c){c=String(c||'');var n=c.replace('院區','');return BR.indexOf(n)>=0?n:null;}
-function resolveUser(e){var m=ADMIN_LIST.indexOf(e.id)>=0;var b=clinicToBranch(e.clinic);var brs=m?BR.slice():(b?[b]:[]);return {id:e.id,name:e.name,title:e.title,clinic:e.clinic,branch:b,branches:brs,canManage:m};}
+// 離線示範：套用與後端相同的白名單規則（白名單模式開→只有名單內的院區可填；關→名單外院區由所屬院區員工填）
+function resolveUser(e){
+  var m=ADMIN_LIST.indexOf(e.id)>=0;var b=clinicToBranch(e.clinic);var brs;
+  if(m) brs=BR.slice();
+  else{
+    var perm=PERM||PERM_SAMPLE, strict=isWhitelistOnly(); brs=[];
+    BR.forEach(function(bn){var list=perm.filter(function(p){return p.branch===bn;});
+      if(list.length){if(list.some(function(p){return p.id===e.id;}))brs.push(bn);}
+      else if(!strict&&b===bn)brs.push(bn);});
+  }
+  return {id:e.id,name:e.name,title:e.title,clinic:e.clinic,branch:b,branches:brs,canManage:m,canFill:(m||brs.length>0)};
+}
 // 正式版：改為 GET ?action=login，由 Apps Script 在伺服器端比對員工編號(A)與密碼(AK)，
 // 僅回傳該使用者的姓名/院區/權限；★ 密碼清單絕不可下載到前端。
 function authenticate(id,pwd){
@@ -346,10 +377,11 @@ function render(){
   if(state.view==='dashboard') drawSparks();
   if(state.view==='detail'){ drawDetailChart(); loadReason(); }
   if(state.view==='batch') bfRecalc();
+  if(state.view==='branches'&&LIVE()&&PERM===null) loadPerm();
 }
 function renderUserbox(){
   var u=document.getElementById('userbox');
-  if(state.user){var nb=(state.user.branches&&state.user.branches.length)||0;var tag=state.user.canManage?'管理':(nb>1?nb+'院區':(state.user.branch?state.user.branch+'院區':'檢視'));
+  if(state.user){var nb=editableBranches().length;var tag=state.user.canManage?'管理':(nb>1?nb+'院區':(nb===1?editableBranches()[0]+'院區':'僅檢視'));
     u.innerHTML='<span class="who">👤 '+state.user.name+'（'+state.user.id+'·'+tag+'）</span><button class="btn btn-ghost btn-sm" onclick="logout()">登出</button>';}
   else u.innerHTML='';
 }
@@ -463,7 +495,7 @@ function viewDetail(){
   var fillNote=!isLoggedIn()?'（需登入）':(eb.length===0?'（無可填報院區）':'（可填報：'+eb.join('、')+'）');
   html+='<div class="panel'+(lockFill?' locked':'')+'" style="margin-top:18px"><h2>✍️ 各院區填報'+fillNote+'</h2>'+
     '<div class="form-row"><div class="field"><label>院區</label><select id="inBranch" onchange="loadReason()">'+eb.map(function(b){return '<option '+(b===defB?'selected':'')+'>'+b+'</option>';}).join('')+'</select></div>'+
-    '<div class="field"><label>期別</label><input id="inPeriod" value="2026-06" placeholder="2026-06" onchange="loadReason()"></div></div>'+
+    '<div class="field"><label>期別</label><input id="inPeriod" value="'+curMonth()+'" placeholder="'+curMonth()+'" onchange="loadReason()"></div></div>'+
     '<div class="form-row"><div class="field"><label>'+ind.num+'（分子）</label><input id="inNum" type="number" oninput="previewCalc()"></div>'+
     '<div class="field"><label>'+ind.den+'（分母）</label><input id="inDen" type="number" oninput="previewCalc()"></div></div>'+
     '<div class="calc"><span class="lab">該院區自動計算</span><span class="res" id="calcRes">— '+ind.unit+'</span></div>'+
@@ -491,7 +523,7 @@ function detailRows(ind){
     var notes=(DB.records[ind.id]||[]).filter(function(r){return r.period===p&&((r.cause&&r.cause.trim())||(r.plan&&r.plan.trim()));}).map(function(r){return {branch:r.branch,cause:r.cause||'',plan:r.plan||''};});
     out.push({period:p,num:ap.num,den:ap.den,value:aggValue(ind,p),branches:ap.branches,notes:notes});
   }});}
-  else{(DB.records[ind.id]||[]).filter(function(r){return r.branch===state.branch;}).forEach(function(r){out.push({period:r.period,num:r.num,den:r.den,value:r.value,cause:r.cause||'',plan:r.plan||''});});}
+  else{(DB.records[ind.id]||[]).filter(function(r){return r.branch===state.branch&&PERIODS.indexOf(r.period)>=0;}).forEach(function(r){out.push({period:r.period,num:r.num,den:r.den,value:r.value,cause:r.cause||'',plan:r.plan||''});});}
   return out.sort(function(a,b){return a.period<b.period?1:-1;});
 }
 function drawDetailChart(){
@@ -538,7 +570,7 @@ function submitRecord(){
   var ex=recs.find(function(r){return r.period===period&&r.branch===branch;});
   if(ex){ex.num=num;ex.den=den;ex.value=val;ex.cause=cause;ex.plan=plan;ex.by=state.user.name;ex.at=today();}
   else recs.push({period:period,branch:branch,num:num,den:den,value:val,cause:cause,plan:plan,by:state.user.name,at:today()});
-  if(PERIODS.indexOf(period)<0){PERIODS.push(period);PERIODS.sort();}
+  rebuildPeriods();
   toast(branch+'院區 '+period+' 已寫入：'+val+ind.unit,'ok');
   render();
 }
@@ -639,7 +671,7 @@ function batchSubmit(){
     return;
   }
   jobs.forEach(function(j){var recs=DB.records[j.ind.id]=DB.records[j.ind.id]||[];var ex=recs.find(function(r){return r.period===period&&r.branch===branch;});var v=calcValue(j.ind,j.num,j.den);if(ex){ex.num=j.num;ex.den=j.den;ex.value=v;ex.by=state.user.name;ex.at=today();}else recs.push({period:period,branch:branch,num:j.num,den:j.den,value:v,by:state.user.name,at:today()});});
-  if(PERIODS.indexOf(period)<0){PERIODS.push(period);PERIODS.sort();}
+  rebuildPeriods();
   toast('已儲存 '+jobs.length+' 筆','ok');render();
 }
 function viewAdmin(){
@@ -659,11 +691,35 @@ function viewAdmin(){
 }
 function viewBranches(){
   if(!isLoggedIn()) return '<div class="empty">⚠️ 請先登入<br><br><button class="btn btn-primary" onclick="openLogin()">登入</button></div>';
-  if(!canManage()) return '<div class="empty">院區管理僅限主管使用</div>';
+  if(!canManage()) return '<div class="empty">系統設定僅限主管使用</div>';
   var list=ALL_BRANCHES.length?ALL_BRANCHES:BRANCHES.map(function(b){return {name:b.name,grp:b.grp,active:true};});
   var actCnt=list.filter(function(b){return b.active;}).length;
-  var html='<div class="page-head"><div><h1>院區管理</h1><div class="sub">新增、改名、啟用／停用院區（儲存後即時套用到全系統，無需改程式）</div></div></div>';
-  html+='<div class="panel"><h2 style="font-size:15px;margin:0 0 10px">＋ 新增院區</h2>'+
+  var html='<div class="page-head"><div><h1>系統設定</h1><div class="sub">指標收案起始月份、院區新增／改名／啟用／停用（儲存後即時套用到全系統，無需改程式）</div></div></div>';
+  // ---- 指標收案起始月份 ----
+  var sm=String(SETTINGS.startMonth||'').trim(), rm=recordMonths(), eff=startMonth(), months=monthsAll();
+  html+='<div class="panel"><h2 style="font-size:15px;margin:0 0 10px">📅 指標收案起始月份</h2>'+
+    '<div class="form-row" style="align-items:flex-end">'+
+    '<div class="field" style="max-width:220px"><label>起始月份（YYYY-MM）</label><input id="cfg_startMonth" type="month" value="'+esc(sm)+'" placeholder="例：2026-01"></div>'+
+    '<div class="field" style="max-width:120px"><button class="btn btn-primary" style="width:100%" onclick="saveStartMonth()">儲存</button></div>'+
+    '<div class="field" style="max-width:120px"><button class="btn btn-light" style="width:100%" onclick="clearStartMonth()">清除</button></div>'+
+    '</div>'+
+    '<div class="thr-help">目前生效：<b>'+esc(eff)+'</b>（'+(sm?'手動設定':'未設定，自動取最早填報月份')+'）　·　月份選單顯示 <b>'+esc(months[0]||'—')+'</b> ～ <b>'+esc(months[months.length-1]||'—')+'</b> 共 '+months.length+' 個月（連續，不再因該月無人填報而跳空）。'+
+    (rm.length?'　最早填報月份：'+esc(rm[0])+'。':'')+
+    '<br>設定後，儀表板／明細／批次填報的期別選單會由起始月連續列到本月；早於起始月的歷史填報數值仍保留在試算表，只是不顯示。</div></div>';
+  // ---- 填報白名單 ----
+  var wl=isWhitelistOnly();
+  html+='<div class="panel" style="margin-top:18px"><h2 style="font-size:15px;margin:0 0 10px">🔐 填報白名單</h2>'+
+    '<div class="form-row" style="align-items:center;margin-bottom:8px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600"><input type="checkbox" id="cfg_wl" '+(wl?'checked':'')+' onchange="toggleWhitelist(this.checked)" style="width:18px;height:18px"> 僅白名單內的員工可填報／修改指標數值（其他人登入後只能檢視）</label></div>'+
+    '<div class="thr-help" style="margin-bottom:12px">'+(wl?'<b>白名單模式：開啟</b>。主管（使用者清單）不受限制，可填報全院區；其他員工必須列在下方名單，且只能填報名單上指定的院區。':'<b>白名單模式：關閉</b>（舊規則）。某院區若有列名單→只限名單內的人填報；沒列名單的院區→由所屬院區員工填報。')+' 指標定義（新增／修改指標）一律僅限主管。名單存於試算表「院區編輯權限」分頁。</div>'+
+    '<div class="form-row" style="align-items:flex-end">'+
+    '<div class="field" style="max-width:160px"><label>員工編號 *</label><input id="wl_id" placeholder="例：0017"></div>'+
+    '<div class="field" style="max-width:200px"><label>可填報院區 *</label><select id="wl_branch"><option value="__ALL__">全部啟用院區</option>'+BR.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('')+'</select></div>'+
+    '<div class="field"><label>備註</label><input id="wl_note" placeholder="例：區經理"></div>'+
+    '<div class="field" style="max-width:120px"><button class="btn btn-primary" style="width:100%" onclick="addPerm()">加入</button></div>'+
+    '</div>'+
+    '<div id="permTable" style="margin-top:12px">'+permTableHtml()+'</div></div>';
+  // ---- 院區管理 ----
+  html+='<div class="panel" style="margin-top:18px"><h2 style="font-size:15px;margin:0 0 10px">＋ 新增院區</h2>'+
     '<div class="form-row" style="align-items:flex-end">'+
     '<div class="field"><label>院區名稱 *</label><input id="nb_name" placeholder="例：中壢"></div>'+
     '<div class="field" style="max-width:160px"><label>群組（縣市）</label><input id="nb_grp" placeholder="例：桃園"></div>'+
@@ -681,6 +737,75 @@ function viewBranches(){
   });
   return html+'</tbody></table></div>';
 }
+// 指標收案起始月份：正式模式寫入後端「系統設定」分頁；離線模式僅存在記憶體
+function saveSetting(key,val,okMsg){
+  if(!canManage()){toast('需主管權限','err');return;}
+  if(key==='startMonth'&&val&&!isYM(val)){toast('起始月份格式須為 YYYY-MM，例：2026-01','err');return;}
+  if(LIVE()){
+    api('saveSetting',{key:key,value:val,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'儲存失敗','err');return;}
+      return loadData().then(function(){state.period=null;toast(okMsg,'ok');render();});
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  SETTINGS[key]=val; rebuildPeriods(); state.period=null; toast(okMsg,'ok'); render();
+}
+function toggleWhitelist(on){saveSetting('whitelistOnly',on?'1':'',on?'已開啟白名單模式：僅名單內員工可填報':'已關閉白名單模式：改回舊規則');}
+/* ---- 填報白名單（院區編輯權限）---- */
+function permList(){return LIVE()?(PERM||[]):(PERM||PERM_SAMPLE);}
+function permTableHtml(){
+  if(LIVE()&&PERM===null) return '<div class="sub">名單載入中…</div>';
+  var list=permList().slice().sort(function(a,b){return a.id===b.id?(a.branch<b.branch?-1:1):(a.id<b.id?-1:1);});
+  var ids={};list.forEach(function(p){ids[p.id]=1;});
+  var h='<div class="admin-tools"><div class="sub">共 '+Object.keys(ids).length+' 位員工、'+list.length+' 筆院區授權</div></div>'+
+    '<table><thead><tr><th>員工編號</th><th>姓名</th><th>可填報院區</th><th>備註</th><th>操作</th></tr></thead><tbody>';
+  if(!list.length) h+='<tr><td colspan="5" class="empty">白名單目前是空的'+(isWhitelistOnly()?'：除主管外，所有人都只能檢視':'')+'</td></tr>';
+  list.forEach(function(p){
+    h+='<tr><td><b>'+esc(p.id)+'</b></td><td>'+(esc(p.name)||'<span style="color:var(--sub)">—</span>')+'</td><td>'+esc(p.branch)+'</td><td>'+(esc(p.note)||'<span style="color:var(--sub)">—</span>')+'</td>'+
+      '<td class="row-actions"><button class="btn btn-light btn-sm" style="color:var(--bad)" onclick="removePerm(\''+esc(p.id)+'\',\''+esc(p.branch)+'\')">移除</button></td></tr>';
+  });
+  return h+'</tbody></table>';
+}
+function loadPerm(){
+  if(!LIVE()||!canManage()) return;
+  api('listPerm',{by:state.user.id}).then(function(res){
+    if(!res.ok){PERM=[];toast(res.error||'白名單載入失敗','err');}
+    else PERM=res.perm||[];
+    var el=document.getElementById('permTable'); if(el) el.innerHTML=permTableHtml();
+  }).catch(function(){PERM=[];var el=document.getElementById('permTable'); if(el) el.innerHTML='<div class="sub" style="color:var(--bad)">白名單載入失敗（連線失敗）</div>';});
+}
+function addPerm(){
+  if(!canManage()){toast('需主管權限','err');return;}
+  var id=gv('wl_id'),sel=gv('wl_branch'),note=gv('wl_note');
+  if(!id){toast('請輸入員工編號','err');return;}
+  var brs=sel==='__ALL__'?BR.slice():[sel];
+  if(LIVE()){
+    api('savePerm',{id:id,branches:brs.join(','),note:note,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'加入失敗','err');return;}
+      var msg='已將 '+res.name+'（'+id+'）加入 '+res.added+' 個院區'+(res.skipped&&res.skipped.length?'；略過：'+res.skipped.join('、'):'');
+      PERM=null; toast(msg,res.added?'ok':'err'); render();
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  var e=EMP_SAMPLE.find(function(x){return x.id===id;}); if(!e){toast('查無員工編號「'+id+'」','err');return;}
+  PERM=permList().slice(); var added=0;
+  brs.forEach(function(b){if(!PERM.some(function(p){return p.id===id&&p.branch===b;})){PERM.push({branch:b,id:id,name:e.name,note:note});added++;}});
+  toast('已將 '+e.name+'（'+id+'）加入 '+added+' 個院區','ok'); render();
+}
+function removePerm(id,branch){
+  if(!canManage()){toast('需主管權限','err');return;}
+  if(!confirm('確定移除 '+id+' 對「'+branch+'」院區的填報權限？')) return;
+  if(LIVE()){
+    api('deletePerm',{id:id,branch:branch,by:state.user.id}).then(function(res){
+      if(!res.ok){toast(res.error||'移除失敗','err');return;}
+      PERM=null; toast('已移除','ok'); render();
+    }).catch(function(){toast('連線失敗','err');});
+    return;
+  }
+  PERM=permList().filter(function(p){return !(p.id===id&&p.branch===branch);}); toast('已移除','ok'); render();
+}
+function saveStartMonth(){var v=gv('cfg_startMonth');if(!v){toast('請選擇起始月份，或按「清除」改為自動','err');return;}saveSetting('startMonth',v,'收案起始月份已設為 '+v);}
+function clearStartMonth(){saveSetting('startMonth','','已清除起始月份，改為自動取最早填報月份');}
 function addBranch(){
   if(!canManage()){toast('需主管權限','err');return;}
   var name=gv('nb_name'),grp=gv('nb_grp');
@@ -841,7 +966,7 @@ function doLogin(){
   toast('歡迎，'+r.user.name+(r.user.title?'（'+r.user.title+'）':''),'ok'); render();
 }
 function openLogin(){logout();}
-function logout(){state.user=null;state.view='dashboard';state.branch=ALL;render();}
+function logout(){state.user=null;state.view='dashboard';state.branch=ALL;if(LIVE())PERM=null;render();}
 function uniqueCats(){var s={};DB.indicators.forEach(function(i){s[i.cat]=1;});return Object.keys(s);}
 function setCat(c){state.filterCat=c;render();}
 function setBranch(b){state.branch=b;render();}

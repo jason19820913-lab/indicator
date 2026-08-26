@@ -311,9 +311,13 @@ function sumParts(ind,branch,months){var sn=0,sd=0,has=false;(DB.records[ind.id]
 function valueForPeriod(ind,branch,gran,key){if(!key)return null;var p=sumParts(ind,branch,monthsOf(gran,key));if(!p||p.den===0)return null;return calcValue(ind,p.num,p.den);}
 function seriesForGran(ind,branch,gran){return periodsForGran(gran).map(function(k){return valueForPeriod(ind,branch,gran,k);});}
 function curPeriod(){var list=periodsForGran(state.gran);if(state.period&&list.indexOf(state.period)>=0)return state.period;return list.length?list[list.length-1]:null;}
-function fillStatus(ind,branch,gran,key){var months=monthsOf(gran,key),recs=DB.records[ind.id]||[],filled=0;var expected=(branch===ALL?BR.length:1)*months.length;months.forEach(function(m){if(branch===ALL){var bs={};recs.forEach(function(r){if(r.period===m)bs[r.branch]=1;});filled+=Object.keys(bs).length;}else{if(recs.some(function(r){return r.period===m&&r.branch===branch;}))filled++;}});return {filled:filled,expected:expected};}
-function isUnfilled(ind){var fs=fillStatus(ind,state.branch,state.gran,curPeriod());return fs.filled<fs.expected;}
+// 指標起始月份：ind.startMonth（YYYY-MM）；空白＝沿用系統收案起始月。某月早於起始月＝該指標該月「不需填報」
+function indStart(ind){var s=String(ind&&ind.startMonth||'').trim();return isYM(s)?s:'';}
+function indDue(ind,m){var s=indStart(ind);return !s||m>=s;}
+function fillStatus(ind,branch,gran,key){var months=monthsOf(gran,key).filter(function(m){return indDue(ind,m);}),recs=DB.records[ind.id]||[],filled=0;var expected=(branch===ALL?BR.length:1)*months.length;months.forEach(function(m){if(branch===ALL){var bs={};recs.forEach(function(r){if(r.period===m)bs[r.branch]=1;});filled+=Object.keys(bs).length;}else{if(recs.some(function(r){return r.period===m&&r.branch===branch;}))filled++;}});return {filled:filled,expected:expected};}
+function isUnfilled(ind){var fs=fillStatus(ind,state.branch,state.gran,curPeriod());return fs.expected>0&&fs.filled<fs.expected;}
 function fillBadge(fs){
+  if(fs.expected===0) return '<span class="pill none" title="此期別早於指標起始月份，不需填報">未開始</span>';
   if(fs.expected<=1) return fs.filled>=1?'<span class="pill good">已填</span>':'<span class="pill bad">未填</span>';
   if(fs.filled===0) return '<span class="pill bad">未填 0/'+fs.expected+'</span>';
   if(fs.filled<fs.expected) return '<span class="pill warn">'+fs.filled+'/'+fs.expected+'</span>';
@@ -494,6 +498,7 @@ function viewDetail(){
     '<div class="kv"><span class="k">目標設定</span><span class="val">'+ind.target+'</span></div>'+
     '<div class="kv"><span class="k">填報頻率</span><span class="val">'+ind.freq+'報</span></div>'+
     '<div class="kv"><span class="k">負責單位</span><span class="val">'+ind.owner+'</span></div>'+
+    '<div class="kv"><span class="k">開始收集</span><span class="val">'+(indStart(ind)||startMonth()+'（系統）')+'</span></div>'+
     '<div class="kv"><span class="k">全院區規則</span><span class="val">Σ分子 ÷ Σ分母</span></div></div>';
   var eb=editableBranches();
   var defB=(state.branch!==ALL&&eb.indexOf(state.branch)>=0)?state.branch:(eb[0]||'');
@@ -562,6 +567,7 @@ function submitRecord(){
   var num=parseFloat(document.getElementById('inNum').value),den=parseFloat(document.getElementById('inDen').value);
   var cause=document.getElementById('inCause').value.trim(),plan=document.getElementById('inPlan').value.trim();
   if(!period){toast('請輸入期別','err');return;}
+  if(!indDue(ind,period)){toast('此指標從 '+indStart(ind)+' 開始收集，'+period+' 不需填報','err');return;}
   if(isNaN(num)||isNaN(den)){toast('請輸入分子與分母','err');return;}
   if(den===0){toast('分母不可為 0','err');return;}
   if(LIVE()){
@@ -616,7 +622,9 @@ function viewBatch(){
   if(!eb.length) return '<div class="empty">您目前沒有可填報的院區</div>';
   var branch=(state.bfBranch&&eb.indexOf(state.bfBranch)>=0)?state.bfBranch:eb[0]; state.bfBranch=branch;
   var period=state.bfPeriod||curMonth(); state.bfPeriod=period;
-  var inds=DB.indicators.filter(function(i){return i.active;});
+  var allActive=DB.indicators.filter(function(i){return i.active;});
+  var inds=allActive.filter(function(i){return indDue(i,period);});
+  var notYet=allActive.filter(function(i){return !indDue(i,period);});
   var exist={};
   inds.forEach(function(ind){var r=(DB.records[ind.id]||[]).find(function(x){return x.branch===branch&&x.period===period;});if(r)exist[ind.id]={num:r.num,den:r.den};});
   var defs=bfDefs();
@@ -627,6 +635,8 @@ function viewBatch(){
     '<div class="field"><label>院區</label><select onchange="setBfBranch(this.value)">'+eb.map(function(b){return '<option '+(b===branch?'selected':'')+'>'+b+'</option>';}).join('')+'</select></div>'+
     '<div class="field"><label>期別</label><input id="bfPeriod" value="'+period+'" onchange="setBfPeriod(this.value)"></div></div>';
   html+='<div class="bfhint">💡 分母定義文字需完全相同才會共用（例如多支指標的分母都填「看診人次」）。改一處分母，所有共用該分母的指標會自動重算。</div>';
+  if(notYet.length) html+='<div class="thr-help" style="margin-top:8px">⏳ 以下指標的起始月份晚於 '+esc(period)+'，本期不需填報：'+notYet.map(function(i){return esc(i.name)+'（'+esc(indStart(i))+' 起）';}).join('、')+'</div>';
+  if(!inds.length) return html+'<div class="empty" style="margin-top:14px">本期沒有需要填報的指標</div></div>';
   html+='<h2 style="font-size:15px;margin:14px 0 8px">① 共用分母（填一次）</h2><div class="bfgrid">';
   defs.forEach(function(d,idx){
     html+='<div class="bfden"><label>'+esc(d)+'</label><input type="number" id="bd_'+idx+'" value="'+(defVal[d]===''?'':defVal[d])+'" oninput="bfRecalc()" placeholder="輸入數字"></div>';
@@ -647,7 +657,7 @@ function viewBatch(){
   return html+'</div>';
 }
 function bfRecalc(){
-  var inds=DB.indicators.filter(function(i){return i.active;});var defs=bfDefs();
+  var inds=DB.indicators.filter(function(i){return i.active;});var defs=bfDefs(); // 未開始的指標頁面上沒有欄位，自然略過
   var denByIdx={};defs.forEach(function(d,idx){var el=document.getElementById('bd_'+idx);denByIdx[idx]=(el&&el.value!=='')?parseFloat(el.value):null;});
   inds.forEach(function(ind){
     var den=denByIdx[defs.indexOf(ind.den)];
@@ -666,7 +676,7 @@ function batchSubmit(){
   var branch=state.bfBranch;var pe=document.getElementById('bfPeriod');var period=(pe?pe.value:state.bfPeriod||'').trim();
   if(!canEditBranch(branch)){toast('您沒有「'+branch+'」院區的填報權限','err');return;}
   if(!period){toast('請輸入期別','err');return;}
-  var inds=DB.indicators.filter(function(i){return i.active;});var defs=bfDefs();
+  var inds=DB.indicators.filter(function(i){return i.active&&indDue(i,period);});var defs=bfDefs();
   var denByIdx={};defs.forEach(function(d,idx){var el=document.getElementById('bd_'+idx);denByIdx[idx]=(el&&el.value!=='')?parseFloat(el.value):null;});
   var jobs=[];
   inds.forEach(function(ind){var ne=document.getElementById('bn_'+ind.id);var num=(ne&&ne.value!=='')?parseFloat(ne.value):null;var den=denByIdx[defs.indexOf(ind.den)];if(num==null||isNaN(num)||den==null||isNaN(den)||den===0)return;jobs.push({ind:ind,num:num,den:den});});
@@ -686,10 +696,12 @@ function viewAdmin(){
   var html='<div class="page-head"><div><h1>指標維護</h1><div class="sub">'+(manage?'新增、修改指標定義、分子分母與閾值設定':'唯讀檢視 · 指標定義由主管維護')+'</div></div></div>';
   if(!manage) html+='<div class="thr-help" style="margin-bottom:14px">👁 唯讀檢視：可查看所有指標的定義、分子分母與閾值；新增/修改由主管統一維護。各院區的填報權限（誰能編輯哪個院區）於員工資料庫的使用者清單設定。</div>';
   html+='<div class="panel"><div class="admin-tools"><div class="sub">共 '+DB.indicators.length+' 項指標</div>'+(manage?'<button class="btn btn-primary btn-sm" onclick="openEdit()">＋ 新增指標</button>':'<span class="branchtag">唯讀</span>')+'</div>';
-  html+='<table><thead><tr><th>代碼</th><th>名稱</th><th>分類</th><th>計算公式</th><th>單位</th><th>閾值型態</th><th>目標</th><th>狀態</th>'+(manage?'<th>操作</th>':'')+'</tr></thead><tbody>';
+  html+='<table><thead><tr><th>代碼</th><th>名稱</th><th>分類</th><th>計算公式</th><th>單位</th><th>閾值型態</th><th>目標</th><th>起始月份</th><th>狀態</th>'+(manage?'<th>操作</th>':'')+'</tr></thead><tbody>';
   DB.indicators.forEach(function(ind){
+    var st=indStart(ind);
     html+='<tr><td>'+ind.id+'</td><td><b>'+ind.name+'</b></td><td>'+ind.cat+'</td><td style="font-size:12.5px;color:var(--sub)">'+ind.num+' ÷ '+ind.den+'</td><td>'+ind.unit+'</td>'+
       '<td><span class="thr-tag">'+thrTypeLabel(ind.thrType)+'</span></td><td>'+ind.target+'</td>'+
+      '<td>'+(st?'<b>'+esc(st)+'</b>':'<span style="color:var(--sub)" title="沿用系統收案起始月份">'+esc(startMonth())+'（系統）</span>')+'</td>'+
       '<td>'+(ind.active?'<span class="pill good">啟用</span>':'<span class="pill none">停用</span>')+'</td>'+
       (manage?'<td class="row-actions"><button class="btn btn-light btn-sm" onclick="openEdit(\''+ind.id+'\')">修改</button><button class="btn btn-light btn-sm" onclick="toggleActive(\''+ind.id+'\')">'+(ind.active?'停用':'啟用')+'</button><button class="btn btn-light btn-sm" style="color:var(--bad)" onclick="deleteIndicator(\''+ind.id+'\')">刪除</button></td>':'')+'</tr>';
   });
@@ -871,7 +883,7 @@ function syncBranches(){
 function openEdit(id){
   if(!canManage()){toast('需主管權限','err');return;}
   state.editId=id||null;
-  var ind=id?DB.indicators.find(function(i){return i.id===id;}):{id:'',name:'',cat:'醫療品質',unit:'%',num:'',den:'',freq:'月',thrType:'min',thr:{target:80,warn:75},owner:'',active:true};
+  var ind=id?DB.indicators.find(function(i){return i.id===id;}):{id:'',name:'',cat:'醫療品質',unit:'%',num:'',den:'',freq:'月',thrType:'min',thr:{target:80,warn:75},owner:'',active:true,startMonth:curMonth()};
   document.getElementById('editTitle').textContent=id?'修改指標 · '+ind.id:'新增指標';
   document.getElementById('editBody').innerHTML=editForm(ind);
   renderThrFields(ind.thrType,ind.thr);
@@ -886,6 +898,8 @@ function editForm(ind){
   '<div class="form-row"><div class="field" style="max-width:110px"><label>單位</label><select id="f_unit">'+['%','‰','分','天','次','元'].map(function(u){return '<option '+(u===ind.unit?'selected':'')+'>'+u+'</option>';}).join('')+'</select></div>'+
   '<div class="field" style="max-width:110px"><label>頻率</label><select id="f_freq">'+['月','季','年'].map(function(f){return '<option '+(f===ind.freq?'selected':'')+'>'+f+'</option>';}).join('')+'</select></div>'+
   '<div class="field"><label>負責單位</label><input id="f_owner" value="'+esc(ind.owner)+'" placeholder="例：醫務部"></div></div>'+
+  '<div class="form-row"><div class="field" style="max-width:200px"><label>開始收集月份</label><input id="f_start" type="month" value="'+esc(indStart(ind))+'"></div>'+
+  '<div class="field"><label>&nbsp;</label><div class="thr-help" style="margin:0">此月份之前的期別不需填報、不列入未填報；留空＝沿用系統收案起始月（目前 '+esc(startMonth())+'）。新增指標時預設為本月，避免舊月份變成要回填。</div></div></div>'+
   '<div class="form-row"><div class="field"><label>閾值型態</label><select id="f_thrType" onchange="onThrTypeChange()">'+
     [['min','越高越好（達標下限）'],['max','越低越好（達標上限）'],['range','區間達標'],['multi','多級門檻（綠/黃/紅）']].map(function(o){return '<option value="'+o[0]+'" '+(o[0]===ind.thrType?'selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div></div>'+
   '<div id="thrFields"></div>';
@@ -915,9 +929,10 @@ function saveIndicator(){
   if(thrType==='min'||thrType==='max'){thr.target=numOrNull('t_target');thr.warn=numOrNull('t_warn');if(thr.target==null){toast('請填達標值','err');return;}}
   else if(thrType==='range'){thr.low=numOrNull('t_low');thr.high=numOrNull('t_high');if(thr.low==null||thr.high==null){toast('請填上下限','err');return;}}
   else if(thrType==='multi'){thr.green=numOrNull('t_green');thr.yellow=numOrNull('t_yellow');if(thr.green==null||thr.yellow==null){toast('請填綠黃門檻','err');return;}}
-  var data={name:name,cat:gv('f_cat'),unit:gv('f_unit'),num:num,den:den,freq:gv('f_freq'),owner:gv('f_owner'),thrType:thrType,thr:thr,target:autoTarget(thrType,thr,gv('f_unit'))};
+  var start=gv('f_start'); if(start&&!isYM(start)){toast('開始收集月份格式須為 YYYY-MM','err');return;}
+  var data={name:name,cat:gv('f_cat'),unit:gv('f_unit'),num:num,den:den,freq:gv('f_freq'),owner:gv('f_owner'),thrType:thrType,thr:thr,target:autoTarget(thrType,thr,gv('f_unit')),startMonth:start};
   if(LIVE()){
-    api('saveIndicator',{id:state.editId||'',name:data.name,cat:data.cat,unit:data.unit,num:data.num,den:data.den,freq:data.freq,thrType:data.thrType,thr:JSON.stringify(data.thr),target:data.target,owner:data.owner,by:state.user.id}).then(function(res){
+    api('saveIndicator',{id:state.editId||'',name:data.name,cat:data.cat,unit:data.unit,num:data.num,den:data.den,freq:data.freq,thrType:data.thrType,thr:JSON.stringify(data.thr),target:data.target,owner:data.owner,startMonth:data.startMonth,by:state.user.id}).then(function(res){
       if(!res.ok){toast(res.error||'儲存失敗','err');return;}
       closeEdit(); return loadData().then(function(){toast(state.editId?'已更新':'已新增（'+res.id+'）','ok');render();});
     }).catch(function(e){toast('連線失敗','err');});

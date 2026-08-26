@@ -49,6 +49,12 @@
   .bbtn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
   .bbtn:hover{border-color:var(--brand);color:var(--brand)}
   .bbtn.active{background:var(--brand);border-color:var(--brand);color:#fff}
+  /* 白名單院區複選 chips */
+  .wlchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .field .wlchips label{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:20px;padding:5px 12px;margin:0;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;flex-direction:row;align-items:center;gap:6px;white-space:nowrap;line-height:1.2;user-select:none}
+  .field .wlchips label:has(input:checked){background:var(--brand);border-color:var(--brand);color:#fff}
+  .wlchips input{width:14px;height:14px;margin:0;accent-color:#fff}
+  .wlchips .wlall{border-style:dashed;color:var(--sub)}
   .bbtn.all{background:#15366e;border-color:#15366e;color:#fff;font-weight:700} .bbtn.all.active{background:var(--brand);border-color:var(--brand)}
   .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
   .strip .s{background:var(--card);border-radius:12px;padding:14px 18px;box-shadow:var(--shadow);border-left:4px solid var(--line)}
@@ -713,10 +719,14 @@ function viewBranches(){
     '<div class="thr-help" style="margin-bottom:12px">'+(wl?'<b>白名單模式：開啟</b>。主管（使用者清單）不受限制，可填報全院區；其他員工必須列在下方名單，且只能填報名單上指定的院區。':'<b>白名單模式：關閉</b>（舊規則）。某院區若有列名單→只限名單內的人填報；沒列名單的院區→由所屬院區員工填報。')+' 指標定義（新增／修改指標）一律僅限主管。名單存於試算表「院區編輯權限」分頁。</div>'+
     '<div class="form-row" style="align-items:flex-end">'+
     '<div class="field" style="max-width:160px"><label>員工編號 *</label><input id="wl_id" placeholder="例：0017"></div>'+
-    '<div class="field" style="max-width:200px"><label>可填報院區 *</label><select id="wl_branch"><option value="__ALL__">全部啟用院區</option>'+BR.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('')+'</select></div>'+
-    '<div class="field"><label>備註</label><input id="wl_note" placeholder="例：區經理"></div>'+
+    '<div class="field"><label>備註</label><input id="wl_note" placeholder="例：區經理（鶯歌＋三樹）"></div>'+
     '<div class="field" style="max-width:120px"><button class="btn btn-primary" style="width:100%" onclick="addPerm()">加入</button></div>'+
     '</div>'+
+    '<div class="field" style="margin-top:10px"><label>可填報院區 *（可複選，例如區經理一人管兩間就勾兩間）</label>'+
+    '<div class="wlchips" id="wl_branches">'+
+    '<label class="wlall"><input type="checkbox" id="wl_all" onchange="wlToggleAll(this.checked)"> 全選</label>'+
+    BR.map(function(b){return '<label><input type="checkbox" class="wl_b" value="'+esc(b)+'" onchange="wlSyncAll()"> '+esc(b)+'</label>';}).join('')+
+    '</div></div>'+
     '<div id="permTable" style="margin-top:12px">'+permTableHtml()+'</div></div>';
   // ---- 院區管理 ----
   html+='<div class="panel" style="margin-top:18px"><h2 style="font-size:15px;margin:0 0 10px">＋ 新增院區</h2>'+
@@ -774,11 +784,15 @@ function loadPerm(){
     var el=document.getElementById('permTable'); if(el) el.innerHTML=permTableHtml();
   }).catch(function(){PERM=[];var el=document.getElementById('permTable'); if(el) el.innerHTML='<div class="sub" style="color:var(--bad)">白名單載入失敗（連線失敗）</div>';});
 }
+function wlSelected(){return Array.prototype.slice.call(document.querySelectorAll('.wl_b:checked')).map(function(e){return e.value;});}
+function wlToggleAll(on){document.querySelectorAll('.wl_b').forEach(function(e){e.checked=on;});}
+function wlSyncAll(){var all=document.querySelectorAll('.wl_b'),chk=document.querySelectorAll('.wl_b:checked');var a=document.getElementById('wl_all');if(a)a.checked=all.length>0&&chk.length===all.length;}
 function addPerm(){
   if(!canManage()){toast('需主管權限','err');return;}
-  var id=gv('wl_id'),sel=gv('wl_branch'),note=gv('wl_note');
+  var id=gv('wl_id'),note=gv('wl_note');
   if(!id){toast('請輸入員工編號','err');return;}
-  var brs=sel==='__ALL__'?BR.slice():[sel];
+  var brs=wlSelected();
+  if(!brs.length){toast('請至少勾選一個院區','err');return;}
   if(LIVE()){
     api('savePerm',{id:id,branches:brs.join(','),note:note,by:state.user.id}).then(function(res){
       if(!res.ok){toast(res.error||'加入失敗','err');return;}
